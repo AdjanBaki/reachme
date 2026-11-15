@@ -37,10 +37,10 @@ export default function LeadsPage() {
             </div>
             <blockquote className="mt-3 border-l-2 border-neutral-300 pl-3 text-sm dark:border-neutral-700">
               <span className="text-xs uppercase tracking-wide text-neutral-500">
-                {signalLabel[lead.signal.kind]}
+                {signalLabel[lead.signal?.kind ?? "post"]}
               </span>
-              <p>{lead.signal.text}</p>
-              <a href={lead.signal.url} className="text-xs text-neutral-500 hover:underline">
+              <p>{lead.signal?.text}</p>
+              <a href={lead.signal?.url} className="text-xs text-neutral-500 hover:underline">
                 Visa på LinkedIn
               </a>
             </blockquote>

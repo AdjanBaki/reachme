@@ -9,6 +9,9 @@ export type LeadOutcome =
 
 export type SignalKind = "post" | "comment" | "like" | "new_role";
 
+/** Where a lead came from: the daily signal scan or a manual CSV import. */
+export type LeadSource = "scan" | "import";
+
 export interface Workspace {
   id: string;
   name: string;
@@ -21,6 +24,15 @@ export interface Workspace {
   /** Hour of day (0-23, Europe/Stockholm) for the daily scan. */
   scanHour: number;
   minFitScore: number;
+  /** Set when the customer has completed onboarding. */
+  onboardedAt?: string;
+}
+
+export interface LeadSignal {
+  kind: SignalKind;
+  text: string;
+  url: string;
+  postedAt: string; // ISO date
 }
 
 export interface Lead {
@@ -31,17 +43,15 @@ export interface Lead {
   company: string;
   location: string;
   profileUrl: string;
-  signal: {
-    kind: SignalKind;
-    text: string;
-    url: string;
-    postedAt: string; // ISO date
-  };
+  /** Missing for imported leads, which have no buying signal yet. */
+  signal?: LeadSignal;
   fitScore: number; // 0-100
   fitReason: string;
   contact?: { email?: string; phone?: string; verified: boolean };
   outcome: LeadOutcome;
   foundAt: string; // ISO date
+  /** Defaults to "scan" when missing. */
+  source?: LeadSource;
 }
 
 export type OutreachKind = "invite" | "message" | "follow_up";
@@ -55,6 +65,8 @@ export interface OutreachItem {
   status: OutreachStatus;
   createdAt: string;
   sentAt?: string;
+  /** Why an item was cancelled automatically, e.g. the lead replied. */
+  cancelReason?: string;
 }
 
 /** Hard daily caps per connected LinkedIn account. */
@@ -63,3 +75,29 @@ export const DAILY_LIMITS: Record<OutreachKind, number> = {
   message: 50,
   follow_up: 50,
 };
+
+export type BlockKind = "profile" | "company";
+
+/** A profile URL or company name that must never be shown or contacted. */
+export interface BlockEntry {
+  id: string;
+  workspaceId: string;
+  kind: BlockKind;
+  value: string;
+  createdAt: string;
+}
+
+/**
+ * A person asked to have their data removed. The lead and its outreach are
+ * deleted, and the profile URL stays here so it is never added again.
+ */
+export interface RemovalRequest {
+  id: string;
+  workspaceId: string;
+  profileUrl: string;
+  fullName?: string;
+  note?: string;
+  requestedAt: string;
+  /** Number of leads deleted when the request was handled. */
+  deletedLeads: number;
+}
