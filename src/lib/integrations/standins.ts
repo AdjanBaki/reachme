@@ -10,6 +10,7 @@ import type {
 /** Stand-ins used until the real services are connected. They never call the network. */
 
 export const standInLinkedIn: LinkedInProvider = {
+  automated: false,
   async searchSignals() {
     return sampleLeads.map(({ fullName, headline, company, location, profileUrl, signal }) => ({
       fullName,

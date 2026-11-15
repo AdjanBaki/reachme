@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { parseKeywords } from "../domain/normalize";
 import { integrations } from "../integrations";
+import { userMessageFor } from "../integrations/errors";
 import { getStore } from "../store";
 import type { Workspace } from "../types";
 
@@ -31,8 +32,8 @@ export async function analyzeWebsite(websiteUrl: string): Promise<AnalyzeResult>
   try {
     const profile = await integrations.ai.profileFromWebsite(url);
     return { ok: true, profile };
-  } catch {
-    return { ok: false, error: "Kunde inte läsa webbplatsen just nu. Fyll i uppgifterna själv." };
+  } catch (error) {
+    return { ok: false, error: userMessageFor(error, "Kunde inte läsa webbplatsen just nu. Fyll i uppgifterna själv.") };
   }
 }
 

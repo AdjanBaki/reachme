@@ -2,9 +2,9 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
+import { DraftButtons } from "@/components/draft-buttons";
 import { Badge, Button, Card, Loading, ScoreBadge, inputClass } from "@/components/ui";
 import { lookupLeadContact, markLeadNotRelevant, setLeadOutcome } from "@/lib/actions/leads";
-import { draftOutreach } from "@/lib/actions/outreach";
 import { isBlocked, isSuppressed } from "@/lib/domain/filters";
 import {
   formatDateTime,
@@ -139,21 +139,7 @@ async function LeadDetail({ params }: { params: PageProps<"/leads/[id]">["params
       <Card>
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-sm font-semibold">Utskick</h2>
-          {lead.outcome !== "not_a_fit" && (
-            <form action={draftOutreach} className="flex flex-wrap gap-2">
-              <input type="hidden" name="leadId" value={lead.id} />
-              <span className="self-center text-xs text-muted">Skriv utkast:</span>
-              <Button type="submit" name="kind" value="invite">
-                Kontaktförfrågan
-              </Button>
-              <Button type="submit" name="kind" value="message">
-                Meddelande
-              </Button>
-              <Button type="submit" name="kind" value="follow_up">
-                Uppföljning
-              </Button>
-            </form>
-          )}
+          {lead.outcome !== "not_a_fit" && <DraftButtons leadId={lead.id} />}
         </div>
         {items.length === 0 ? (
           <p className="text-sm text-muted">Inga utskick till den här personen än.</p>

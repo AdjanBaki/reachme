@@ -2,27 +2,32 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { Suspense } from "react";
 import { OutreachCard } from "@/components/outreach-card";
-import { Badge, Card, Empty, Loading, PageHeader } from "@/components/ui";
+import { Badge, Card, Empty, Loading, Notice, PageHeader } from "@/components/ui";
 import { isBlocked, isSuppressed } from "@/lib/domain/filters";
-import { dayKey, isPending, remainingQuota } from "@/lib/domain/outreach";
+import { dayKey, isPending } from "@/lib/domain/outreach";
+import { effectiveLimits, remainingToday, sendingSettings } from "@/lib/domain/pacing";
+import { integrations } from "@/lib/integrations";
+import { INVITE_NOTE_MAX } from "@/lib/integrations/anthropic-ai";
 import { formatDateTime, outreachKindLabel } from "@/lib/labels";
 import { getStore } from "@/lib/store";
-import { DAILY_LIMITS, type OutreachKind } from "@/lib/types";
 
 export const metadata: Metadata = { title: "Redo att skicka" };
 
-const kinds = Object.keys(DAILY_LIMITS) as OutreachKind[];
-
 async function Queue() {
   const store = await getStore();
-  const [outreach, leads, blockList, removals] = await Promise.all([
+  const [workspace, outreach, leads, blockList, removals] = await Promise.all([
+    store.getWorkspace(),
     store.listOutreach(),
     store.listLeads(),
     store.listBlockList(),
     store.listRemovalRequests(),
   ]);
   const now = new Date();
-  const quota = remainingQuota(outreach, now);
+  const automated = integrations.linkedin.automated;
+  const settings = sendingSettings(workspace.sending);
+  const limits = effectiveLimits(settings, workspace.sendingState, now, automated);
+  const remaining = remainingToday(outreach, settings, workspace.sendingState, now, automated);
+  const paused = automated && workspace.sendingState?.pausedAt;
   const leadById = new Map(leads.map((l) => [l.id, l]));
 
   // Blocked or removed people never show up in the queue.
@@ -40,16 +45,38 @@ async function Queue() {
 
   return (
     <>
-      <section aria-label="Kvar att skicka i dag" className="mb-6 grid gap-3 sm:grid-cols-3">
-        {kinds.map((kind) => (
-          <Card key={kind}>
-            <p className="text-xs text-muted">{outreachKindLabel[kind]}</p>
-            <p className="mt-1 text-2xl font-semibold tabular-nums">
-              {quota[kind]}
-              <span className="text-sm font-normal text-muted"> / {DAILY_LIMITS[kind]} kvar i dag</span>
-            </p>
-          </Card>
-        ))}
+      {paused && (
+        <div className="mb-4">
+          <Notice tone="danger">
+            <strong>Utskicken är pausade.</strong> {workspace.sendingState?.pauseReason}{" "}
+            <Link href="/installningar" className="underline">
+              Återuppta under Inställningar
+            </Link>
+          </Notice>
+        </div>
+      )}
+      <div className="mb-4">
+        <Notice>
+          {automated
+            ? "Automatiska utskick via LinkedIn är på. Godkända utskick skickas när du klickar, i jämn takt under arbetstid."
+            : "Manuellt läge: kopiera texten, skicka den själv på LinkedIn och markera den som skickad."}
+        </Notice>
+      </div>
+      <section aria-label="Kvar att skicka i dag" className="mb-6 grid gap-3 sm:grid-cols-2">
+        <Card>
+          <p className="text-xs text-muted">Kontaktförfrågningar</p>
+          <p className="mt-1 text-2xl font-semibold tabular-nums">
+            {remaining.invite}
+            <span className="text-sm font-normal text-muted"> / {limits.invite} kvar i dag</span>
+          </p>
+        </Card>
+        <Card>
+          <p className="text-xs text-muted">Meddelanden och uppföljningar</p>
+          <p className="mt-1 text-2xl font-semibold tabular-nums">
+            {remaining.messages}
+            <span className="text-sm font-normal text-muted"> / {limits.messages} kvar i dag</span>
+          </p>
+        </Card>
       </section>
 
       <h2 className="mb-3 text-base font-semibold">Väntar på dig ({pendingItems.length})</h2>
@@ -67,7 +94,10 @@ async function Queue() {
                 item={item}
                 leadName={lead.fullName}
                 leadHeadline={lead.headline}
-                quotaLeft={quota[item.kind]}
+                profileUrl={lead.profileUrl}
+                quotaLeft={item.kind === "invite" ? remaining.invite : remaining.messages}
+                automated={automated}
+                maxLength={item.kind === "invite" ? INVITE_NOTE_MAX : undefined}
               />
             );
           })}

@@ -26,6 +26,36 @@ export interface Workspace {
   minFitScore: number;
   /** Set when the customer has completed onboarding. */
   onboardedAt?: string;
+  /** When "Sök nu" (or a scheduled scan) last finished. */
+  lastScanAt?: string;
+  /** Sending pace for the LinkedIn account. Missing means defaults. */
+  sending?: SendingSettings;
+  /** Sending state used for pacing; written by the app. */
+  sendingState?: SendingState;
+}
+
+export interface SendingSettings {
+  /** Connection invites per day (capped by DAILY_LIMITS.invite). */
+  invitesPerDay: number;
+  /** Messages and follow-ups per day combined (capped by DAILY_LIMITS.message). */
+  messagesPerDay: number;
+  /** Start low and ramp up over the first two weeks of automated sending. */
+  rampUp: boolean;
+  /** Only send Monday-Friday between these hours (Europe/Stockholm). */
+  weekdaysOnly: boolean;
+  startHour: number;
+  endHour: number;
+}
+
+export interface SendingState {
+  /** First automated send; the ramp-up counts from here. */
+  startedAt?: string;
+  lastSentAt?: string;
+  /** Earliest time the next automated send is allowed (random gap). */
+  nextSendNotBefore?: string;
+  /** Set when LinkedIn reported a restriction; sending stays paused until resumed. */
+  pausedAt?: string;
+  pauseReason?: string;
 }
 
 export interface LeadSignal {
