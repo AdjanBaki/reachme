@@ -15,11 +15,24 @@ export interface RawSignal {
   signal: Lead["signal"];
 }
 
+export interface SendResult {
+  ok: boolean;
+  /** Swedish message for the user when ok is false. */
+  error?: string;
+  /**
+   * Set when LinkedIn reports a restriction, checkpoint or rate limit.
+   * All sending is paused until the user resumes it.
+   */
+  pauseReason?: string;
+}
+
 export interface LinkedInProvider {
+  /** True when this provider sends through the customer's account automatically. */
+  readonly automated: boolean;
   /** Find public posts, comments and likes that match the workspace keywords. */
   searchSignals(workspace: Workspace): Promise<RawSignal[]>;
   /** Send an approved invite or message from the customer's own account. */
-  send(item: OutreachItem, lead: Lead): Promise<{ ok: boolean; error?: string }>;
+  send(item: OutreachItem, lead: Lead): Promise<SendResult>;
 }
 
 export interface AiProvider {

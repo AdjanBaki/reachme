@@ -1,9 +1,11 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { Suspense } from "react";
+import { ScanPanel } from "@/components/scan-panel";
 import { Badge, Card, Empty, Loading, Notice, PageHeader, ScoreBadge, buttonClass, inputClass } from "@/components/ui";
 import { isBlocked, isSuppressed, meetsMinScore, visibleLeads } from "@/lib/domain/filters";
-import { formatDate, outcomeLabel, outcomeOrder, signalLabel } from "@/lib/labels";
+import { integrations } from "@/lib/integrations";
+import { formatDate, formatDateTime, outcomeLabel, outcomeOrder, signalLabel } from "@/lib/labels";
 import { getStore } from "@/lib/store";
 import type { LeadOutcome, SignalKind } from "@/lib/types";
 
@@ -44,6 +46,11 @@ async function LeadsList({ searchParams }: { searchParams: PageProps<"/leads">["
           </Notice>
         </div>
       )}
+
+      <ScanPanel
+        linkedinConnected={integrations.linkedin.automated}
+        lastScan={workspace.lastScanAt ? formatDateTime(workspace.lastScanAt) : undefined}
+      />
 
       <form method="get" className="mb-4 flex flex-wrap items-end gap-3">
         <div className="min-w-40">

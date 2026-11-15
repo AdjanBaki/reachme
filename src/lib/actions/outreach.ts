@@ -2,9 +2,10 @@
 
 import { revalidatePath } from "next/cache";
 import { isBlocked, isSuppressed } from "../domain/filters";
-import { canSend, isPending } from "../domain/outreach";
+import { isPending } from "../domain/outreach";
+import { checkSend, nextGapMs, sendingSettings } from "../domain/pacing";
 import { integrations } from "../integrations";
-import { outreachKindLabel } from "../labels";
+import { userMessageFor } from "../integrations/errors";
 import { getStore } from "../store";
 import { DAILY_LIMITS, type Lead, type OutreachItem, type OutreachKind } from "../types";
 
@@ -32,18 +33,25 @@ async function contactableLead(
   return { ok: true, lead };
 }
 
+export type OutreachActionState = { error?: string; message?: string };
+
 /** Create a draft for a lead using the AI provider. */
-export async function draftOutreach(formData: FormData) {
+export async function draftOutreach(_prev: OutreachActionState, formData: FormData): Promise<OutreachActionState> {
   const leadId = String(formData.get("leadId") ?? "");
   const kind = formData.get("kind");
-  if (!leadId || !isKind(kind)) return;
+  if (!leadId || !isKind(kind)) return { error: "Okänd typ av utskick." };
 
   const checked = await contactableLead(leadId);
-  if (!checked.ok) return;
+  if (!checked.ok) return { error: checked.error };
 
   const store = await getStore();
   const workspace = await store.getWorkspace();
-  const body = await integrations.ai.draftMessage(workspace, checked.lead, kind);
+  let body: string;
+  try {
+    body = await integrations.ai.draftMessage(workspace, checked.lead, kind);
+  } catch (error) {
+    return { error: userMessageFor(error, "Kunde inte skriva ett utkast. Försök igen.") };
+  }
   await store.addOutreach({
     id: `out_${crypto.randomUUID()}`,
     leadId,
@@ -53,13 +61,12 @@ export async function draftOutreach(formData: FormData) {
     createdAt: new Date().toISOString(),
   });
   revalidatePath("/", "layout");
+  return { message: "Utkastet finns i Redo att skicka." };
 }
-
-export type OutreachActionState = { error?: string; message?: string };
 
 /**
  * One entry point for the queue card so each card can show its own result.
- * `intent` is one of save, approve, cancel or send.
+ * `intent` is one of save, approve, cancel, send (automated) or mark_sent (manual).
  */
 export async function outreachAction(_prev: OutreachActionState, formData: FormData): Promise<OutreachActionState> {
   const id = String(formData.get("id") ?? "");
@@ -82,7 +89,10 @@ export async function outreachAction(_prev: OutreachActionState, formData: FormD
       result = { message: "Utskicket är avbrutet." };
       break;
     case "send":
-      result = await send(item);
+      result = await send(item, true);
+      break;
+    case "mark_sent":
+      result = await send(item, false);
       break;
     default:
       result = { error: "Okänd åtgärd." };
@@ -111,28 +121,50 @@ async function approve(item: OutreachItem, body: string): Promise<OutreachAction
   return { message: "Godkänt." };
 }
 
-async function send(item: OutreachItem): Promise<OutreachActionState> {
+/**
+ * Send an approved item. With `viaProvider` the LinkedIn provider sends it
+ * (automated mode, paced). Without it the user has sent it by hand and we
+ * only record it, still within the daily limits.
+ */
+async function send(item: OutreachItem, viaProvider: boolean): Promise<OutreachActionState> {
   if (item.status !== "approved") return { error: "Godkänn utskicket innan det skickas." };
+  const automated = viaProvider && integrations.linkedin.automated;
+  if (viaProvider && !automated) return { error: "Automatiska utskick är inte inkopplade. Skicka själv och markera som skickat." };
 
+  const store = await getStore();
   const checked = await contactableLead(item.leadId);
   if (!checked.ok) {
-    const store = await getStore();
     await store.saveOutreach([{ ...item, status: "cancelled", cancelReason: checked.error }]);
     return { error: `${checked.error} Utskicket är avbrutet.` };
   }
 
-  const store = await getStore();
-  const all = await store.listOutreach();
+  const [workspace, all] = await Promise.all([store.getWorkspace(), store.listOutreach()]);
   const now = new Date();
-  if (!canSend(all, item.kind, now)) {
-    return {
-      error: `Dagens gräns för ${outreachKindLabel[item.kind].toLowerCase()} är nådd (${DAILY_LIMITS[item.kind]} per dag). Försök igen i morgon.`,
-    };
+  const settings = sendingSettings(workspace.sending);
+  const check = checkSend({ kind: item.kind, items: all, settings, state: workspace.sendingState, now, automated });
+  if (!check.ok) return { error: check.reason };
+
+  if (automated) {
+    const response = await integrations.linkedin.send(item, checked.lead);
+    if (response.pauseReason) {
+      await store.saveWorkspace({
+        ...workspace,
+        sendingState: { ...workspace.sendingState, pausedAt: now.toISOString(), pauseReason: response.pauseReason },
+      });
+      return { error: `Utskicken är pausade. ${response.pauseReason}` };
+    }
+    if (!response.ok) return { error: response.error ?? "Det gick inte att skicka. Försök igen senare." };
+    await store.saveWorkspace({
+      ...workspace,
+      sendingState: {
+        ...workspace.sendingState,
+        startedAt: workspace.sendingState?.startedAt ?? now.toISOString(),
+        lastSentAt: now.toISOString(),
+        nextSendNotBefore: new Date(now.getTime() + nextGapMs()).toISOString(),
+      },
+    });
   }
 
-  const response = await integrations.linkedin.send(item, checked.lead);
-  if (!response.ok) return { error: response.error ?? "Det gick inte att skicka. Försök igen senare." };
-
   await store.saveOutreach([{ ...item, status: "sent", sentAt: now.toISOString() }]);
-  return { message: "Skickat." };
+  return { message: automated ? "Skickat via LinkedIn." : "Markerat som skickat." };
 }
