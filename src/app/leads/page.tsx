@@ -1,55 +1,133 @@
-import { sampleLeads, sampleWorkspace } from "@/lib/sample-data";
-import type { SignalKind } from "@/lib/types";
+import type { Metadata } from "next";
+import Link from "next/link";
+import { Suspense } from "react";
+import { Badge, Card, Empty, Loading, Notice, PageHeader, ScoreBadge, buttonClass, inputClass } from "@/components/ui";
+import { isBlocked, isSuppressed, meetsMinScore, visibleLeads } from "@/lib/domain/filters";
+import { formatDate, outcomeLabel, outcomeOrder, signalLabel } from "@/lib/labels";
+import { getStore } from "@/lib/store";
+import type { LeadOutcome, SignalKind } from "@/lib/types";
 
-const signalLabel: Record<SignalKind, string> = {
-  post: "Inlägg",
-  comment: "Kommentar",
-  like: "Gillning",
-  new_role: "Ny roll",
-};
+export const metadata: Metadata = { title: "Leads" };
 
-export default function LeadsPage() {
-  const leads = sampleLeads
-    .filter((l) => l.fitScore >= sampleWorkspace.minFitScore)
-    .sort((a, b) => b.fitScore - a.fitScore);
+const signalKinds = Object.keys(signalLabel) as SignalKind[];
+
+function pick<T extends string>(value: string | string[] | undefined, allowed: readonly T[]): T | undefined {
+  return typeof value === "string" && (allowed as readonly string[]).includes(value) ? (value as T) : undefined;
+}
+
+async function LeadsList({ searchParams }: { searchParams: PageProps<"/leads">["searchParams"] }) {
+  const params = await searchParams;
+  const outcome = pick<LeadOutcome>(params.utfall, outcomeOrder);
+  const signalKind = pick<SignalKind>(params.signal, signalKinds);
+
+  const store = await getStore();
+  const [workspace, leads, blockList, removals] = await Promise.all([
+    store.getWorkspace(),
+    store.listLeads(),
+    store.listBlockList(),
+    store.listRemovalRequests(),
+  ]);
+
+  const leadsToShow = visibleLeads(leads, { minFitScore: workspace.minFitScore, outcome, signalKind }, blockList, removals);
+  const belowScore = leads.filter(
+    (l) => !isBlocked(l, blockList) && !isSuppressed(l.profileUrl, removals) && !meetsMinScore(l, workspace.minFitScore),
+  ).length;
+  const filtered = Boolean(outcome || signalKind);
 
   return (
-    <main className="mx-auto max-w-3xl px-4 py-10">
-      <h1 className="text-2xl font-semibold">Dagens leads</h1>
-      <p className="mt-1 text-sm text-neutral-500">
-        {leads.length} personer med köpsignal för {sampleWorkspace.name} (exempeldata)
+    <>
+      {!workspace.onboardedAt && (
+        <div className="mb-4">
+          <Notice tone="warning">
+            Ni ser exempeldata. <Link href="/kom-igang" className="font-medium underline">Gå igenom Kom igång</Link> för att
+            ställa in vad ni säljer och vem ni vill nå.
+          </Notice>
+        </div>
+      )}
+
+      <form method="get" className="mb-4 flex flex-wrap items-end gap-3">
+        <div className="min-w-40">
+          <label htmlFor="utfall" className="mb-1 block text-xs font-medium text-muted">
+            Utfall
+          </label>
+          <select id="utfall" name="utfall" defaultValue={outcome ?? ""} className={inputClass}>
+            <option value="">Alla</option>
+            {outcomeOrder.map((o) => (
+              <option key={o} value={o}>
+                {outcomeLabel[o]}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="min-w-40">
+          <label htmlFor="signal" className="mb-1 block text-xs font-medium text-muted">
+            Signal
+          </label>
+          <select id="signal" name="signal" defaultValue={signalKind ?? ""} className={inputClass}>
+            <option value="">Alla</option>
+            {signalKinds.map((k) => (
+              <option key={k} value={k}>
+                {signalLabel[k]}
+              </option>
+            ))}
+          </select>
+        </div>
+        <button type="submit" className={buttonClass("secondary", "py-2")}>
+          Filtrera
+        </button>
+        {filtered && (
+          <Link href="/leads" className={buttonClass("ghost", "py-2")}>
+            Rensa
+          </Link>
+        )}
+      </form>
+
+      <p className="mb-3 text-sm text-muted">
+        {leadsToShow.length} {leadsToShow.length === 1 ? "lead" : "leads"} med minst {workspace.minFitScore} % matchning
+        {belowScore > 0 && ` · ${belowScore} under gränsen döljs`}
       </p>
-      <ul className="mt-6 space-y-4">
-        {leads.map((lead) => (
-          <li key={lead.id} className="rounded-lg border border-neutral-200 p-4 dark:border-neutral-800">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <a href={lead.profileUrl} className="font-medium hover:underline">
-                  {lead.fullName}
-                </a>
-                <p className="text-sm text-neutral-500">
-                  {lead.headline} · {lead.location}
-                </p>
-              </div>
-              <span className="shrink-0 rounded-full bg-emerald-100 px-2.5 py-0.5 text-sm font-medium text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
-                {lead.fitScore} %
-              </span>
-            </div>
-            <blockquote className="mt-3 border-l-2 border-neutral-300 pl-3 text-sm dark:border-neutral-700">
-              <span className="text-xs uppercase tracking-wide text-neutral-500">
-                {signalLabel[lead.signal.kind]}
-              </span>
-              <p>{lead.signal.text}</p>
-              <a href={lead.signal.url} className="text-xs text-neutral-500 hover:underline">
-                Visa på LinkedIn
-              </a>
-            </blockquote>
-            <p className="mt-3 text-sm text-neutral-600 dark:text-neutral-400">
-              <span className="font-medium">Varför:</span> {lead.fitReason}
-            </p>
-          </li>
-        ))}
-      </ul>
-    </main>
+
+      {leadsToShow.length === 0 ? (
+        <Empty>{filtered ? "Inga leads matchar filtret." : "Inga leads än. Nya leads dyker upp efter morgonens sökning."}</Empty>
+      ) : (
+        <ul className="space-y-3">
+          {leadsToShow.map((lead) => (
+            <li key={lead.id}>
+              <Card className="transition-colors hover:border-accent">
+                <Link href={`/leads/${lead.id}`} className="block">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="min-w-0">
+                      <p className="font-medium">{lead.fullName}</p>
+                      <p className="truncate text-sm text-muted">
+                        {lead.headline}
+                        {lead.location && ` · ${lead.location}`}
+                      </p>
+                    </div>
+                    {lead.source === "import" ? <Badge>Importerad</Badge> : <ScoreBadge score={lead.fitScore} />}
+                  </div>
+                  {lead.signal && <p className="mt-3 line-clamp-2 text-sm">”{lead.signal.text}”</p>}
+                  <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-muted">
+                    <Badge tone={lead.outcome === "new" ? "accent" : "neutral"}>{outcomeLabel[lead.outcome]}</Badge>
+                    {lead.signal && <span>{signalLabel[lead.signal.kind]}</span>}
+                    <span>Hittad {formatDate(lead.foundAt)}</span>
+                  </div>
+                </Link>
+              </Card>
+            </li>
+          ))}
+        </ul>
+      )}
+    </>
+  );
+}
+
+export default function LeadsPage(props: PageProps<"/leads">) {
+  return (
+    <>
+      <PageHeader title="Leads" description="Personer som visat köpsignaler, sorterade efter hur väl de matchar er idealkund." />
+      <Suspense fallback={<Loading />}>
+        <LeadsList searchParams={props.searchParams} />
+      </Suspense>
+    </>
   );
 }

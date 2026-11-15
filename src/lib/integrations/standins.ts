@@ -58,8 +58,8 @@ export const standInEmail: EmailProvider = {
 };
 
 export const standInBilling: BillingProvider = {
-  async startCheckout() {
-    return "/billing/demo";
+  async startCheckout(_workspaceId, plan) {
+    return `/abonnemang/demo?plan=${plan}`;
   },
   async isActive() {
     return true;
