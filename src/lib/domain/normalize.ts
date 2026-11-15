@@ -43,3 +43,17 @@ export function nameFromProfileUrl(url: string): string {
   if (words.length === 0) return "Okänd person";
   return words.map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
 }
+
+/** Split comma- or newline-separated keywords, trimmed and de-duplicated (max 30). */
+export function parseKeywords(raw: string): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const part of raw.split(/[,\n]/)) {
+    const keyword = part.trim();
+    const key = keyword.toLowerCase();
+    if (!keyword || seen.has(key)) continue;
+    seen.add(key);
+    result.push(keyword);
+  }
+  return result.slice(0, 30);
+}
