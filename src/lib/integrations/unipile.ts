@@ -5,39 +5,39 @@ import { IntegrationError } from "./errors";
 import type { LinkedInProvider, RawSignal, SendResult } from "./types";
 
 /**
- * LinkedIn through Unipile (https://developer.unipile.com).
+ * LinkedIn through Unipile's v2 API (https://developer.unipile.com/v2.0).
  *
- * Endpoints used, as documented:
- * - POST /api/v1/linkedin/search?account_id=…  (api "classic", category "posts")
- * - GET  /api/v1/users/{public_identifier}?account_id=…  (provider_id, is_relationship)
- * - POST /api/v1/users/invite  { provider_id, account_id, message }
- * - POST /api/v1/chats  multipart { account_id, attendees_ids, text }
+ * Endpoints used, as documented (account id in the path, auth via X-API-KEY):
+ * - POST /v2/{account_id}/linkedin/search/posts            post search
+ * - GET  /v2/{account_id}/users/{public_identifier}?variant=linkedin_classic
+ * - POST /v2/{account_id}/users/me/relation-requests       { user_id, message }
+ * - POST /v2/{account_id}/chats/send                       { users_ids, text }
  *
  * Nothing here tries to hide automation. Pacing and approval live in the app.
  */
 
+export const DEFAULT_UNIPILE_BASE = "https://api.unipile.com/v2";
+
 export interface UnipileConfig {
   apiKey: string;
+  /** API base address; defaults to https://api.unipile.com/v2. */
   dsn: string;
+  /** The linked LinkedIn account, "acc_…". */
   accountId: string;
 }
 
-/** Max posts read per keyword in one scan, to stay well under search limits. */
+/** Posts requested per keyword (documented range 1–49). */
 export const MAX_POSTS_PER_KEYWORD = 25;
 export const MAX_KEYWORDS_PER_SCAN = 8;
 
-/** Unipile error types that mean LinkedIn is limiting or blocking the account. */
+/** Error types that mean LinkedIn or the account connection needs attention. */
 const PAUSE_TYPES = new Set([
-  "errors/checkpoint_error",
-  "errors/account_restricted",
-  "errors/disconnected_account",
-  "errors/invalid_credentials",
-  "errors/expired_credentials",
-  "errors/too_many_requests",
-  "errors/cannot_resend_yet",
-  "errors/limit_exceeded",
-  "errors/connection_limit_reached",
-  "errors/provider_error",
+  "provider/unknown_authentication_context",
+  "provider/invalid_checkpoint_code",
+  "provider/invalid_authorization",
+  "provider/invalid_credentials",
+  "provider/too_many_requests",
+  "api/account_restricted",
 ]);
 
 export class UnipileError extends Error {
@@ -49,29 +49,47 @@ export class UnipileError extends Error {
     this.name = "UnipileError";
   }
 
-  /** LinkedIn is limiting the account: stop sending until the user resumes. */
+  /** LinkedIn is limiting or blocking the account: stop sending until the user resumes. */
   get shouldPause(): boolean {
-    return this.status === 429 || (this.type !== undefined && PAUSE_TYPES.has(this.type));
+    const type = this.type ?? "";
+    if (PAUSE_TYPES.has(type)) return true;
+    if (type.includes("cannot_resend_yet")) return true;
+    // Per Unipile, a provider 429 or 5xx means LinkedIn throttled the account.
+    if (type.startsWith("provider/") && (this.status === 429 || this.status >= 500)) return true;
+    return false;
   }
 }
 
-interface SearchPostItem {
+interface PostAuthor {
   type?: string;
+  display_name?: string;
+  public_identifier?: string;
+  profile_url?: string;
+  description?: string;
+}
+
+interface PostSearchItem {
   share_url?: string;
-  parsed_datetime?: string;
+  created_at?: string;
   text?: string;
-  author?: { name?: string; public_identifier?: string; headline?: string; is_company?: boolean };
+  author?: PostAuthor;
 }
 
 interface UserProfile {
-  provider_id?: string;
-  public_identifier?: string;
-  is_relationship?: boolean;
+  id?: string;
+  specifics?: {
+    network_distance?: string;
+    relation_request_status?: string;
+  };
 }
 
-function baseUrl(dsn: string): string {
-  const trimmed = dsn.trim().replace(/\/+$/, "");
-  return /^https?:\/\//.test(trimmed) ? trimmed : `https://${trimmed}`;
+/** Base address from UNIPILE_DSN; always ends in /v2, no trailing slash. */
+export function baseUrl(dsn: string | undefined): string {
+  let value = (dsn ?? "").trim().replace(/\/+$/, "");
+  if (!value) return DEFAULT_UNIPILE_BASE;
+  if (!/^https?:\/\//.test(value)) value = `https://${value}`;
+  if (!/\/v2$/.test(value)) value = `${value}/v2`;
+  return value;
 }
 
 /** Public identifier from a profile URL: linkedin.com/in/{id}. */
@@ -80,24 +98,34 @@ export function publicIdentifier(profileUrl: string): string | null {
   return match ? decodeURIComponent(match[1]) : null;
 }
 
-/** Human-readable pause reason for a Unipile error type. */
+/** Human-readable pause reason for a Unipile error. */
 export function pauseMessage(error: UnipileError): string {
-  switch (error.type) {
-    case "errors/checkpoint_error":
-      return "LinkedIn vill att du bekräftar ditt konto (checkpoint). Logga in på LinkedIn och följ instruktionerna, koppla sedan om kontot i Unipile.";
-    case "errors/account_restricted":
-      return "LinkedIn har begränsat ditt konto. Pausa all automatik och kontrollera kontot på LinkedIn.";
-    case "errors/disconnected_account":
-    case "errors/invalid_credentials":
-    case "errors/expired_credentials":
-      return "LinkedIn-kontot är inte längre kopplat i Unipile. Koppla om kontot i Unipiles kontrollpanel.";
-    case "errors/cannot_resend_yet":
-    case "errors/limit_exceeded":
-    case "errors/connection_limit_reached":
-      return "LinkedIn säger att gränsen för kontaktförfrågningar är nådd. Vänta minst ett dygn innan du återupptar.";
-    default:
-      return "LinkedIn begränsar just nu hur mycket som kan skickas. Vänta några timmar innan du återupptar.";
+  const type = error.type ?? "";
+  if (type === "provider/unknown_authentication_context" || type === "provider/invalid_checkpoint_code") {
+    return "LinkedIn vill att du bekräftar ditt konto. Logga in på LinkedIn och följ instruktionerna, koppla sedan om kontot i Unipile.";
   }
+  if (type === "provider/invalid_authorization" || type === "provider/invalid_credentials") {
+    return "LinkedIn-kontot behöver kopplas om i Unipile. Gör det i Unipiles kontrollpanel.";
+  }
+  if (type === "api/account_restricted") {
+    return "Unipile har spärrat LinkedIn-kontot. Kontrollera kontot i Unipiles kontrollpanel.";
+  }
+  if (type.includes("cannot_resend_yet")) {
+    return "LinkedIn säger att gränsen för kontaktförfrågningar är nådd. Vänta minst ett dygn innan du återupptar.";
+  }
+  return "LinkedIn begränsar just nu hur mycket som kan skickas. Vänta några timmar innan du återupptar.";
+}
+
+function sendErrorMessage(error: UnipileError): string {
+  const type = error.type ?? "";
+  if (type === "api/too_many_requests") return "Unipile tar emot för många anrop just nu. Försök igen om en stund.";
+  if (type === "provider/resource_not_found" || error.status === 404) return "Hittade inte personen eller LinkedIn-kontot i Unipile.";
+  if (type === "provider/conflict") return "LinkedIn tog inte emot utskicket, troligen finns redan en förfrågan eller konversation.";
+  if (type === "api/invalid_parameters") return "Unipile godtog inte uppgifterna. Kontrollera texten och försök igen.";
+  if (error.status === 401 || error.status === 403) {
+    return "Unipile godkände inte nyckeln. Kontrollera UNIPILE_API_KEY och UNIPILE_ACCOUNT_ID i .env.local.";
+  }
+  return `Unipile svarade med fel (${error.status}). Försök igen senare.`;
 }
 
 export class UnipileLinkedInProvider implements LinkedInProvider {
@@ -112,7 +140,7 @@ export class UnipileLinkedInProvider implements LinkedInProvider {
   }
 
   private async request<T>(path: string, init: RequestInit & { query?: Record<string, string> } = {}): Promise<T> {
-    const url = new URL(`${this.base}/api/v1${path}`);
+    const url = new URL(`${this.base}/${encodeURIComponent(this.config.accountId)}${path}`);
     for (const [key, value] of Object.entries(init.query ?? {})) url.searchParams.set(key, value);
     const response = await this.http(url, {
       ...init,
@@ -147,21 +175,14 @@ export class UnipileLinkedInProvider implements LinkedInProvider {
     const results: RawSignal[] = [];
     const seen = new Set<string>();
     for (const keyword of workspace.keywords.slice(0, MAX_KEYWORDS_PER_SCAN)) {
-      // Only the first page is read. Unipile's docs do not say how to send the
-      // cursor back for post searches, and one page per keyword is plenty.
-      const data = await this.request<{ items?: SearchPostItem[] }>("/linkedin/search", {
+      // One page per keyword is enough for a daily scan and keeps volume low.
+      const data = await this.request<{ data?: PostSearchItem[] }>("/linkedin/search/posts", {
         method: "POST",
-        query: { account_id: this.config.accountId },
+        query: { limit: String(MAX_POSTS_PER_KEYWORD) },
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          api: "classic",
-          category: "posts",
-          keywords: keyword,
-          sort_by: "date",
-          date_posted: "past_week",
-        }),
+        body: JSON.stringify({ keywords: keyword, sort_by: "DATE", date_posted: "PAST_WEEK" }),
       });
-      for (const item of (data.items ?? []).slice(0, MAX_POSTS_PER_KEYWORD)) {
+      for (const item of data.data ?? []) {
         const signal = toRawSignal(item);
         if (!signal) continue;
         const key = signal.signal?.url ?? signal.profileUrl;
@@ -175,40 +196,36 @@ export class UnipileLinkedInProvider implements LinkedInProvider {
 
   private async profile(lead: Lead): Promise<UserProfile> {
     const id = publicIdentifier(lead.profileUrl);
-    if (!id) throw new UnipileError(400, "errors/invalid_parameters");
-    return this.request<UserProfile>(`/users/${encodeURIComponent(id)}`, {
-      query: { account_id: this.config.accountId },
-    });
+    if (!id) throw new UnipileError(400, "api/invalid_parameters");
+    return this.request<UserProfile>(`/users/${encodeURIComponent(id)}`, { query: { variant: "linkedin_classic" } });
   }
 
   async send(item: OutreachItem, lead: Lead): Promise<SendResult> {
     try {
       const profile = await this.profile(lead);
-      if (!profile.provider_id) return { ok: false, error: "Hittade inte personen på LinkedIn." };
+      if (!profile.id) return { ok: false, error: "Hittade inte personen på LinkedIn." };
+      const connected = profile.specifics?.network_distance === "FIRST_DEGREE";
 
       if (item.kind === "invite") {
-        if (profile.is_relationship) return { ok: false, error: "Ni är redan kontakter. Skicka ett meddelande i stället." };
-        await this.request("/users/invite", {
+        if (connected) return { ok: false, error: "Ni är redan kontakter. Skicka ett meddelande i stället." };
+        if (profile.specifics?.relation_request_status === "PENDING") {
+          return { ok: false, error: "Det finns redan en obesvarad kontaktförfrågan till den här personen." };
+        }
+        await this.request("/users/me/relation-requests", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            provider_id: profile.provider_id,
-            account_id: this.config.accountId,
-            message: item.body.slice(0, INVITE_NOTE_MAX),
-          }),
+          body: JSON.stringify({ user_id: profile.id, message: item.body.slice(0, INVITE_NOTE_MAX) }),
         });
         return { ok: true };
       }
 
-      // Messages without InMail can only go to existing connections.
-      if (!profile.is_relationship) {
-        return { ok: false, error: "Ni är inte kontakter än. Skicka en kontaktförfrågan först." };
-      }
-      const form = new FormData();
-      form.set("account_id", this.config.accountId);
-      form.set("attendees_ids", profile.provider_id);
-      form.set("text", item.body);
-      await this.request("/chats", { method: "POST", body: form });
+      // Messages without InMail only go to existing connections.
+      if (!connected) return { ok: false, error: "Ni är inte kontakter än. Skicka en kontaktförfrågan först." };
+      await this.request("/chats/send", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ users_ids: profile.id, text: item.body }),
+      });
       return { ok: true };
     } catch (error) {
       if (error instanceof UnipileError) {
@@ -220,39 +237,23 @@ export class UnipileLinkedInProvider implements LinkedInProvider {
   }
 }
 
-function sendErrorMessage(error: UnipileError): string {
-  switch (error.type) {
-    case "errors/already_invited_recently":
-      return "En kontaktförfrågan skickades nyligen till den här personen.";
-    case "errors/already_connected":
-      return "Ni är redan kontakter. Skicka ett meddelande i stället.";
-    case "errors/cannot_invite_attendee":
-    case "errors/invalid_recipient":
-      return "LinkedIn tillåter inte en kontaktförfrågan till den här personen.";
-    case "errors/too_many_characters":
-      return "Texten är för lång för LinkedIn. Korta ner den.";
-    case "errors/resource_not_found":
-    case "errors/invalid_resource_identifier":
-      return "Hittade inte personen eller LinkedIn-kontot i Unipile.";
-    default:
-      return error.status === 401 || error.status === 403
-        ? "Unipile godkände inte nyckeln. Kontrollera UNIPILE_API_KEY och UNIPILE_ACCOUNT_ID i .env.local."
-        : `Unipile svarade med fel (${error.status}). Försök igen senare.`;
-  }
-}
-
 /** Map a post search item to a signal. Company posts and posts without an author are skipped. */
-export function toRawSignal(item: SearchPostItem): RawSignal | null {
+export function toRawSignal(item: PostSearchItem): RawSignal | null {
   const author = item.author;
-  if (!author?.public_identifier || !author.name || author.is_company) return null;
+  if (!author || author.type !== "individual" || !author.display_name) return null;
   if (!item.text?.trim()) return null;
-  const profileUrl = `https://www.linkedin.com/in/${author.public_identifier}`;
-  const headline = author.headline?.trim() ?? "";
+  const profileUrl =
+    author.profile_url && /linkedin\.com\/in\//i.test(author.profile_url)
+      ? author.profile_url
+      : author.public_identifier
+        ? `https://www.linkedin.com/in/${author.public_identifier}`
+        : null;
+  if (!profileUrl) return null;
+  // The v2 author object has no headline field; "description" is the closest documented field.
+  const headline = author.description?.trim() ?? "";
   return {
-    fullName: author.name.trim(),
+    fullName: author.display_name.trim(),
     headline,
-    // Post results do not include company or location; the company is guessed
-    // from a headline like "VD på Företaget AB" and location is left empty.
     company: companyFromHeadline(headline),
     location: "",
     profileUrl,
@@ -260,7 +261,7 @@ export function toRawSignal(item: SearchPostItem): RawSignal | null {
       kind: "post",
       text: item.text.trim(),
       url: item.share_url ?? profileUrl,
-      postedAt: item.parsed_datetime ?? new Date().toISOString(),
+      postedAt: item.created_at ?? new Date().toISOString(),
     },
   };
 }

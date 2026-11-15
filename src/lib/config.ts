@@ -7,6 +7,7 @@ export const DEFAULT_ANTHROPIC_MODEL = "claude-opus-5-5";
 
 export interface IntegrationConfig {
   anthropic: { apiKey: string; model: string } | null;
+  /** dsn is the API base address; empty means Unipile's default v2 address. */
   unipile: { apiKey: string; dsn: string; accountId: string } | null;
 }
 
@@ -26,9 +27,7 @@ export function readIntegrationConfig(env: Record<string, string | undefined> = 
       ? { apiKey: anthropicKey, model: value(env, "ANTHROPIC_MODEL") ?? DEFAULT_ANTHROPIC_MODEL }
       : null,
     unipile:
-      unipileKey && unipileDsn && unipileAccount
-        ? { apiKey: unipileKey, dsn: unipileDsn, accountId: unipileAccount }
-        : null,
+      unipileKey && unipileAccount ? { apiKey: unipileKey, dsn: unipileDsn ?? "", accountId: unipileAccount } : null,
   };
 }
 

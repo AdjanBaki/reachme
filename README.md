@@ -47,10 +47,10 @@ Appen fungerar utan nycklar, i exempelläge. Lägg till nycklar för det du vill
 - Lägg den i `ANTHROPIC_API_KEY`. Valfritt: välj modell med `ANTHROPIC_MODEL` (standard `claude-opus-5-5`).
 
 **LinkedIn via Unipile** – automatisk sökning bland inlägg och utskick från ditt eget LinkedIn-konto.
-- Skapa ett konto på https://www.unipile.com och koppla ditt LinkedIn-konto i kontrollpanelen.
-- `UNIPILE_API_KEY`: under *Access tokens*.
-- `UNIPILE_DSN`: din serveradress, till exempel `api1.unipile.com:13111`.
-- `UNIPILE_ACCOUNT_ID`: id:t för det kopplade LinkedIn-kontot under *Accounts*.
+- Skapa ett konto på https://www.unipile.com, skapa en **Production**-applikation och koppla ditt LinkedIn-konto.
+- `UNIPILE_API_KEY`: under *API keys* i applikationen.
+- `UNIPILE_DSN`: lämna tomt. Appen använder Unipiles v2-adress `https://api.unipile.com/v2`.
+- `UNIPILE_ACCOUNT_ID`: id:t för det kopplade LinkedIn-kontot, börjar med `acc_` (under *Accounts*).
 
 Utan Unipile fungerar LinkedIn-delen manuellt: klistra in inlägg på **Leads**, godkänn utkasten i
 **Redo att skicka**, klicka **Kopiera och öppna profil**, skicka själv och markera som skickat.
